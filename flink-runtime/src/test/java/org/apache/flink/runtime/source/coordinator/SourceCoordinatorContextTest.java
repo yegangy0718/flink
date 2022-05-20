@@ -23,6 +23,7 @@ import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSourceSplit;
 import org.apache.flink.api.connector.source.mocks.MockSourceSplitSerializer;
 import org.apache.flink.core.testutils.ManuallyTriggeredScheduledExecutorService;
+import org.apache.flink.runtime.operators.coordination.CoordinatorExecutorThreadFactory;
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.runtime.source.event.AddSplitEvent;
 import org.apache.flink.runtime.source.event.ReaderRegistrationEvent;
@@ -201,7 +202,7 @@ public class SourceCoordinatorContextTest extends SourceCoordinatorTestBase {
                 new SourceCoordinatorContext<>(
                         manualCoordinatorExecutor,
                         manualWorkerExecutor,
-                        new SourceCoordinatorProvider.CoordinatorExecutorThreadFactory(
+                        new CoordinatorExecutorThreadFactory(
                                 TEST_OPERATOR_ID.toHexString(), operatorCoordinatorContext),
                         operatorCoordinatorContext,
                         new MockSourceSplitSerializer(),

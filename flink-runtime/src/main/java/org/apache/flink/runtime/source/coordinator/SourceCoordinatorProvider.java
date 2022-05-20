@@ -23,6 +23,7 @@ import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.operators.coordination.CoordinatorExecutorThreadFactory;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
 import org.apache.flink.runtime.operators.coordination.RecreateOnResetOperatorCoordinator;
 
@@ -84,61 +85,5 @@ public class SourceCoordinatorProvider<SplitT extends SourceSplit>
                 sourceCoordinatorContext,
                 context.getCoordinatorStore(),
                 alignmentParams);
-    }
-
-    /** A thread factory class that provides some helper methods. */
-    public static class CoordinatorExecutorThreadFactory
-            implements ThreadFactory, Thread.UncaughtExceptionHandler {
-
-        private static final Logger LOG = LoggerFactory.getLogger(SourceCoordinatorProvider.class);
-        private final String coordinatorThreadName;
-        private final ClassLoader cl;
-        private final Thread.UncaughtExceptionHandler errorHandler;
-
-        @Nullable private Thread t;
-
-        CoordinatorExecutorThreadFactory(
-                final String coordinatorThreadName, final OperatorCoordinator.Context context) {
-            this(
-                    coordinatorThreadName,
-                    context.getUserCodeClassloader(),
-                    (t, e) -> {
-                        LOG.error(
-                                "Thread '{}' produced an uncaught exception. Failing the job.",
-                                t.getName(),
-                                e);
-                        context.failJob(e);
-                    });
-        }
-
-        CoordinatorExecutorThreadFactory(
-                final String coordinatorThreadName,
-                final ClassLoader contextClassLoader,
-                final Thread.UncaughtExceptionHandler errorHandler) {
-            this.coordinatorThreadName = coordinatorThreadName;
-            this.cl = contextClassLoader;
-            this.errorHandler = errorHandler;
-        }
-
-        @Override
-        public synchronized Thread newThread(Runnable r) {
-            t = new Thread(r, coordinatorThreadName);
-            t.setContextClassLoader(cl);
-            t.setUncaughtExceptionHandler(this);
-            return t;
-        }
-
-        @Override
-        public synchronized void uncaughtException(Thread t, Throwable e) {
-            errorHandler.uncaughtException(t, e);
-        }
-
-        String getCoordinatorThreadName() {
-            return coordinatorThreadName;
-        }
-
-        boolean isCurrentThreadCoordinatorThread() {
-            return Thread.currentThread() == t;
-        }
     }
 }

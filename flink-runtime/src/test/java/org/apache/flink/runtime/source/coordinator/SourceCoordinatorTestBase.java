@@ -24,6 +24,7 @@ import org.apache.flink.api.connector.source.mocks.MockSourceSplit;
 import org.apache.flink.api.connector.source.mocks.MockSourceSplitSerializer;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorCheckpointSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.operators.coordination.CoordinatorExecutorThreadFactory;
 import org.apache.flink.runtime.operators.coordination.CoordinatorStoreImpl;
 import org.apache.flink.runtime.operators.coordination.EventReceivingTasks;
 import org.apache.flink.runtime.operators.coordination.MockOperatorCoordinatorContext;
@@ -58,7 +59,7 @@ public abstract class SourceCoordinatorTestBase {
     protected MockOperatorCoordinatorContext operatorCoordinatorContext;
 
     // ---- Mocks for the Source Coordinator Context ----
-    protected SourceCoordinatorProvider.CoordinatorExecutorThreadFactory coordinatorThreadFactory;
+    protected CoordinatorExecutorThreadFactory coordinatorThreadFactory;
     protected ScheduledExecutorService coordinatorExecutor;
     protected SplitAssignmentTracker<MockSourceSplit> splitSplitAssignmentTracker;
     protected SourceCoordinatorContext<MockSourceSplit> context;
@@ -77,7 +78,7 @@ public abstract class SourceCoordinatorTestBase {
         splitSplitAssignmentTracker = new SplitAssignmentTracker<>();
         String coordinatorThreadName = TEST_OPERATOR_ID.toHexString();
         coordinatorThreadFactory =
-                new SourceCoordinatorProvider.CoordinatorExecutorThreadFactory(
+                new CoordinatorExecutorThreadFactory(
                         coordinatorThreadName, operatorCoordinatorContext);
 
         coordinatorExecutor = Executors.newScheduledThreadPool(1, coordinatorThreadFactory);
