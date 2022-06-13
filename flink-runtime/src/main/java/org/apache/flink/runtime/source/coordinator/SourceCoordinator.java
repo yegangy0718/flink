@@ -61,6 +61,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
 import static java.util.Arrays.asList;
@@ -86,22 +88,30 @@ import static org.apache.flink.util.Preconditions.checkState;
  */
 @Internal
 public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
-        extends BaseCoordinator<SourceCoordinatorContext<SplitT>> {
+        implements OperatorCoordinator {
     private static final Logger LOG = LoggerFactory.getLogger(SourceCoordinator.class);
 
     private final WatermarkAggregator<Integer> combinedWatermark = new WatermarkAggregator<>();
 
     private final WatermarkAlignmentParams watermarkAlignmentParams;
 
+    /** The name of the operator this SourceCoordinator is associated with. */
+    private final String operatorName;
     /** The Source that is associated with this SourceCoordinator. */
     private final Source<?, SplitT, EnumChkT> source;
     /** The serializer that handles the serde of the SplitEnumerator checkpoints. */
     private final SimpleVersionedSerializer<EnumChkT> enumCheckpointSerializer;
+    /** The context containing the states of the coordinator. */
+    private final SourceCoordinatorContext<SplitT> context;
+
+    private final CoordinatorStore coordinatorStore;
     /**
      * The split enumerator created from the associated Source. This one is created either during
      * resetting the coordinator to a checkpoint, or when the coordinator is started.
      */
     private SplitEnumerator<SplitT, EnumChkT> enumerator;
+    /** A flag marking whether the coordinator has started. */
+    private boolean started;
 
     public SourceCoordinator(
             String operatorName,
@@ -122,9 +132,12 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
             SourceCoordinatorContext<SplitT> context,
             CoordinatorStore coordinatorStore,
             WatermarkAlignmentParams watermarkAlignmentParams) {
-        super(operatorName, context, coordinatorStore);
+        //super(operatorName, context, coordinatorStore);
+        this.operatorName = operatorName;
         this.source = source;
         this.enumCheckpointSerializer = source.getEnumeratorCheckpointSerializer();
+        this.context = context;
+        this.coordinatorStore = coordinatorStore;
         this.watermarkAlignmentParams = watermarkAlignmentParams;
 
         if (watermarkAlignmentParams.isEnabled()) {
@@ -169,7 +182,11 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
 
     @Override
     public void start() throws Exception {
-        super.start();
+        LOG.info("Starting split enumerator for source {}.", operatorName);
+
+        // we mark this as started first, so that we can later distinguish the cases where
+        // 'start()' wasn't called and where 'start()' failed.
+        started = true;
 
         // there are two ways the SplitEnumerator can get created:
         //  (1) Source.restoreEnumerator(), in which case the 'resetToCheckpoint()' method creates
@@ -286,6 +303,41 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
     }
 
     @Override
+    public void subtaskReady(int subtask, SubtaskGateway gateway) {
+        assert subtask == gateway.getSubtask();
+
+        runInEventLoop(
+                () -> context.subtaskReady(gateway),
+                "making event gateway to subtask %d available",
+                subtask);
+    }
+
+    @Override
+    public void checkpointCoordinator(long checkpointId, CompletableFuture<byte[]> result) {
+        runInEventLoop(
+                () -> {
+                    LOG.debug(
+                            "Taking a state snapshot on operator {} for checkpoint {}",
+                            operatorName,
+                            checkpointId);
+                    try {
+                        context.onCheckpoint(checkpointId);
+                        result.complete(toBytes(checkpointId));
+                    } catch (Throwable e) {
+                        ExceptionUtils.rethrowIfFatalErrorOrOOM(e);
+                        result.completeExceptionally(
+                                new CompletionException(
+                                        String.format(
+                                                "Failed to checkpoint SplitEnumerator for source %s",
+                                                operatorName),
+                                        e));
+                    }
+                },
+                "taking checkpoint %d",
+                checkpointId);
+    }
+
+    @Override
     public void notifyCheckpointComplete(long checkpointId) {
         runInEventLoop(
                 () -> {
@@ -342,10 +394,33 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
             final ThrowingRunnable<Throwable> action,
             final String actionName,
             final Object... actionNameFormatParameters) {
+
+        ensureStarted();
+
         if (enumerator == null) {
             return;
         }
-        super.runInEventLoop(action, actionName, actionNameFormatParameters);
+
+        context.runInCoordinatorThread(
+                () -> {
+                    try {
+                        action.run();
+                    } catch (Throwable t) {
+                        // if we have a JVM critical error, promote it immediately, there is a good
+                        // chance the
+                        // logging or job failing will not succeed any more
+                        ExceptionUtils.rethrowIfFatalErrorOrOOM(t);
+
+                        final String actionString =
+                                String.format(actionName, actionNameFormatParameters);
+                        LOG.error(
+                                "Uncaught exception in the SplitEnumerator for Source {} while {}. Triggering job failover.",
+                                operatorName,
+                                actionString,
+                                t);
+                        context.failJob(t);
+                    }
+                });
     }
 
     // ---------------------------------------------------
@@ -364,7 +439,7 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
      * @return A byte array containing the serialized state of the source coordinator.
      * @throws Exception When something goes wrong in serialization.
      */
-    protected byte[] toBytes(long checkpointId) throws Exception {
+    private byte[] toBytes(long checkpointId) throws Exception {
         return writeCheckpointBytes(
                 enumerator.snapshotState(checkpointId), enumCheckpointSerializer);
     }
@@ -438,6 +513,12 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
                                         }));
     }
 
+    private void ensureStarted() {
+        if (!started) {
+            throw new IllegalStateException("The coordinator has not started yet.");
+        }
+    }
+
     private static class WatermarkAggregator<T> {
         private final Map<T, Watermark> watermarks = new HashMap<>();
         private Watermark aggregatedWatermark = new Watermark(Long.MIN_VALUE);
@@ -470,4 +551,6 @@ public class SourceCoordinator<SplitT extends SourceSplit, EnumChkT>
             return aggregatedWatermark;
         }
     }
+
+
 }

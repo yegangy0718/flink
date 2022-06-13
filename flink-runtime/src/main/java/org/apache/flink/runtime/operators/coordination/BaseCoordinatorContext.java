@@ -62,7 +62,7 @@ public abstract class BaseCoordinatorContext
 
     private static final Logger LOG = LoggerFactory.getLogger(BaseCoordinatorContext.class);
 
-    protected final ScheduledExecutorService workerExecutor;
+    //protected final ScheduledExecutorService workerExecutor;
     protected final ScheduledExecutorService coordinatorExecutor;
     protected final OperatorCoordinator.Context operatorCoordinatorContext;
     protected final CoordinatorExecutorThreadFactory
@@ -77,10 +77,6 @@ public abstract class BaseCoordinatorContext
             OperatorCoordinator.Context operatorCoordinatorContext) {
         this(
                 Executors.newScheduledThreadPool(1, coordinatorThreadFactory),
-                Executors.newScheduledThreadPool(
-                        numWorkerThreads,
-                        new ExecutorThreadFactory(
-                                coordinatorThreadFactory.getCoordinatorThreadName() + "-worker")),
                 coordinatorThreadFactory,
                 operatorCoordinatorContext);
     }
@@ -89,10 +85,8 @@ public abstract class BaseCoordinatorContext
 
     public BaseCoordinatorContext(
             ScheduledExecutorService coordinatorExecutor,
-            ScheduledExecutorService workerExecutor,
             CoordinatorExecutorThreadFactory coordinatorThreadFactory,
             OperatorCoordinator.Context operatorCoordinatorContext) {
-        this.workerExecutor = workerExecutor;
         this.coordinatorExecutor = coordinatorExecutor;
         this.coordinatorThreadFactory = coordinatorThreadFactory;
         this.operatorCoordinatorContext = operatorCoordinatorContext;
@@ -119,30 +113,17 @@ public abstract class BaseCoordinatorContext
         return coordinatorExecutor;
     }
 
-    /** {@inheritDoc} If the runnable throws an Exception, the corresponding job is failed. */
-    public void runInCoordinatorThread(Runnable runnable) {
-        // when using a ScheduledThreadPool, uncaught exception handler catches only
-        // exceptions thrown by the threadPool, so manually call it when the exception is
-        // thrown by the runnable
-        coordinatorExecutor.execute(
-                new ThrowableCatchingRunnable(
-                        throwable ->
-                                coordinatorThreadFactory.uncaughtException(
-                                        Thread.currentThread(), throwable),
-                        runnable));
-    }
-
     @Override
     public void close() throws InterruptedException {
         closed = true;
         // Close quietly so the closing sequence will be executed completely.
-        shutdownExecutorForcefully(workerExecutor, Duration.ofNanos(Long.MAX_VALUE));
+        //shutdownExecutorForcefully(workerExecutor, Duration.ofNanos(Long.MAX_VALUE));
         shutdownExecutorForcefully(coordinatorExecutor, Duration.ofNanos(Long.MAX_VALUE));
     }
 
     // --------- Package private additional methods for the SourceCoordinator ------------
 
-    protected void subtaskReady(OperatorCoordinator.SubtaskGateway gateway) {
+    public void subtaskReady(OperatorCoordinator.SubtaskGateway gateway) {
         final int subtask = gateway.getSubtask();
         if (subtaskGateways[subtask] == null) {
             subtaskGateways[gateway.getSubtask()] = gateway;
@@ -187,20 +168,20 @@ public abstract class BaseCoordinatorContext
         failJob(t);
     }
 
-    /**
-     * Behavior of SourceCoordinatorContext on checkpoint.
-     *
-     * @param checkpointId The id of the ongoing checkpoint.
-     */
-    protected abstract void onCheckpoint(long checkpointId) throws Exception;
-
-
-    /**
-     * Invoked when a successful checkpoint has been taken.
-     *
-     * @param checkpointId the id of the successful checkpoint.
-     */
-    protected abstract void onCheckpointComplete(long checkpointId);
+//    /**
+//     * Behavior of SourceCoordinatorContext on checkpoint.
+//     *
+//     * @param checkpointId The id of the ongoing checkpoint.
+//     */
+//    protected abstract void onCheckpoint(long checkpointId) throws Exception;
+//
+//
+//    /**
+//     * Invoked when a successful checkpoint has been taken.
+//     *
+//     * @param checkpointId the id of the successful checkpoint.
+//     */
+//    protected abstract void onCheckpointComplete(long checkpointId);
 
 
     public OperatorCoordinator.Context getCoordinatorContext() {
@@ -218,6 +199,20 @@ public abstract class BaseCoordinatorContext
         }
     }
 
+
+    /** {@inheritDoc} If the runnable throws an Exception, the corresponding job is failed. */
+    public void runInCoordinatorThread(Runnable runnable) {
+        // when using a ScheduledThreadPool, uncaught exception handler catches only
+        // exceptions thrown by the threadPool, so manually call it when the exception is
+        // thrown by the runnable
+        coordinatorExecutor.execute(
+                new ThrowableCatchingRunnable(
+                        throwable ->
+                                coordinatorThreadFactory.uncaughtException(
+                                        Thread.currentThread(), throwable),
+                        runnable));
+    }
+
     /**
      * A helper method that delegates the callable to the coordinator thread if the current thread
      * is not the coordinator thread, otherwise call the callable right away.
@@ -233,7 +228,7 @@ public abstract class BaseCoordinatorContext
                             try {
                                 return callable.call();
                             } catch (Throwable t) {
-                                LOG.error("Uncaught Exception in Source Coordinator Executor", t);
+                                LOG.error("Uncaught Exception in Coordinator Executor", t);
                                 ExceptionUtils.rethrowException(t);
                                 return null;
                             }
@@ -248,7 +243,7 @@ public abstract class BaseCoordinatorContext
         try {
             return callable.call();
         } catch (Throwable t) {
-            LOG.error("Uncaught Exception in Source Coordinator Executor", t);
+            LOG.error("Uncaught Exception in Coordinator Executor", t);
             throw new FlinkRuntimeException(errorMessage, t);
         }
     }
